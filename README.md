@@ -1,12 +1,7 @@
 # PlotShop Manager
 
-A client-only Fabric mod for managing honor-system barrel shops on the Monumenta server. It queries CoreProtect container logs, parses the chat output, and exports per-barrel transaction CSVs.
+一个用于 Monumenta 服务器的**纯客户端** Fabric 模组，用来管理的Plot桶商店：自动查询 CoreProtect 的容器记录、解析聊天输出，并按桶导出交易 CSV。
 
-一个用于 Monumenta 服务器的**纯客户端** Fabric 模组，用来管理「告示牌标价、玩家自觉交易」的无人看管桶商店：自动查询 CoreProtect 的容器记录、解析聊天输出，并按桶导出交易 CSV。
-
-## 为什么是客户端模组
-
-Monumenta 上 CoreProtect 的 Networking API 无法使用（握手失败），因此本模组采用「路线 A」：向服务器发送 `/co lookup` 聊天指令，再解析 CoreProtect 回显到聊天栏的记录。整个过程不需要服务端安装任何东西。
 
 ## 功能
 
@@ -17,10 +12,6 @@ Monumenta 上 CoreProtect 的 Networking API 无法使用（握手失败），�
 - **按桶导出 CSV**：每个桶一个 CSV，另有 `barrels.csv` 汇总登记信息；UTF-8 BOM 编码，Excel 可直接打开。
 - **去重**：同一批查询重复解析到的记录只保留一次。
 
-## 安装
-
-1. 安装 [Fabric Loader](https://fabricmc.net/use/)（Minecraft 1.20.4）与 [Fabric API](https://modrinth.com/mod/fabric-api) 0.91.1+1.20.4。
-2. 从 [Releases](../../releases) 下载 `plotshop-manager-1.0.0.jar`，放入 `.minecraft/mods`。
 
 ## 使用方法
 
@@ -75,7 +66,7 @@ CSV 明细列：`timestamp, player, item, material, amount, direction, currency_
 ## 已知限制
 
 - 仅支持 Monumenta（依赖其 CoreProtect 输出格式与物品/货币命名）。
-- 外汇桶（告示牌没有 `buy for` / `sell for`）无法用快速注册，需用 `/shop register` 手动登记。
+- 告示牌没有 `buy for` / `sell for` 的桶无法用快速注册，需用 `/shop register` 手动登记。
 - 增量扫描的时间起点基于**本机时钟**，换电脑或改系统时间后建议用完整时间参数（如 `/shop scan guildplot 30d`）重新校准。
 
 ## 许可
