@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "plotshop-manager",
+  "version": "${version}",
+  "name": "PlotShop Manager",
+  "description": "Client-side barrel shop manager: auto-query CoreProtect container logs and export per-barrel transaction CSVs.",
+  "authors": [
+    "Moxiangbei"
+  ],
+  "license": "LGPL-3.0-or-later",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "net.plotshop.manager.PlotShopManagerClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": "~1.20.4",
+    "java": ">=17",
+    "fabric-api": "*"
+  }
+}
