@@ -26,29 +26,31 @@ import java.util.Map;
  */
 public final class BarrelContentsReader {
 
+    /** Parsed shop sign: a label plus the optional buy/sell prices. */
+    public static final class SignInfo {
+        public final String label;
+        public final String buy;
+        public final String sell;
+
+        SignInfo(String label, String buy, String sell) {
+            this.label = label;
+            this.buy = buy;
+            this.sell = sell;
+        }
+    }
+
     private BarrelContentsReader() {
     }
 
     /**
-     * Parse the currently open barrel screen into a registration. Returns null when
-     * no sign with a buy/sell price could be found (or nothing identifiable).
+     * Read the shop sign from a barrel screen, returning its label and prices.
+     * Returns null when the container holds no sign with a buy/sell price.
      */
-    public static Barrel read(ScreenHandler handler, BlockPos pos, String world) {
-        if (handler == null || pos == null || world == null) {
+    public static SignInfo readSign(ScreenHandler handler) {
+        if (handler == null) {
             return null;
         }
-
-        List<ItemStack> containerStacks = new ArrayList<>();
-        for (Slot slot : handler.slots) {
-            if (slot != null && slot.inventory != null && !(slot.inventory instanceof PlayerInventory)) {
-                containerStacks.add(slot.getStack());
-            }
-        }
-
-        String label = "";
-        String buy = "";
-        String sell = "";
-        for (ItemStack stack : containerStacks) {
+        for (ItemStack stack : containerStacks(handler)) {
             if (!isSignItem(stack)) {
                 continue;
             }
@@ -56,9 +58,9 @@ public final class BarrelContentsReader {
             if (lines.isEmpty()) {
                 continue;
             }
-            if (!lines.get(0).isBlank()) {
-                label = cleanText(lines.get(0));
-            }
+            String label = lines.get(0).isBlank() ? "" : cleanText(lines.get(0));
+            String buy = "";
+            String sell = "";
             for (String line : lines) {
                 String clean = cleanText(line);
                 String lower = clean.toLowerCase(Locale.ROOT);
@@ -72,13 +74,62 @@ public final class BarrelContentsReader {
                 }
             }
             if (!buy.isEmpty() || !sell.isEmpty()) {
-                break;
+                return new SignInfo(label, buy, sell);
             }
         }
+        return null;
+    }
 
-        if (buy.isEmpty() && sell.isEmpty()) {
+    /**
+     * Read every non-sign item in the container as a name -> count map. Currency
+     * stacks are included so the caller can classify them. Sign items are skipped.
+     */
+    public static Map<String, Integer> readContents(ScreenHandler handler) {
+        Map<String, Integer> contents = new HashMap<>();
+        if (handler == null) {
+            return contents;
+        }
+        for (ItemStack stack : containerStacks(handler)) {
+            if (isSignItem(stack)) {
+                continue;
+            }
+            String name = itemDisplayName(stack);
+            if (name.isEmpty()) {
+                continue;
+            }
+            contents.merge(name, stack.getCount(), Integer::sum);
+        }
+        return contents;
+    }
+
+    private static List<ItemStack> containerStacks(ScreenHandler handler) {
+        List<ItemStack> containerStacks = new ArrayList<>();
+        for (Slot slot : handler.slots) {
+            if (slot != null && slot.inventory != null && !(slot.inventory instanceof PlayerInventory)) {
+                containerStacks.add(slot.getStack());
+            }
+        }
+        return containerStacks;
+    }
+
+    /**
+     * Parse the currently open barrel screen into a registration. Returns null when
+     * no sign with a buy/sell price could be found (or nothing identifiable).
+     */
+    public static Barrel read(ScreenHandler handler, BlockPos pos, String world) {
+        if (handler == null || pos == null || world == null) {
             return null;
         }
+
+        List<ItemStack> containerStacks = containerStacks(handler);
+
+        SignInfo sign = readSign(handler);
+        if (sign == null) {
+            return null;
+        }
+        String label = sign.label;
+        String buy = sign.buy;
+        String sell = sign.sell;
 
         // The goods item is the non-currency, non-sign item with the highest total count.
         Map<String, Integer> goods = new HashMap<>();
@@ -114,7 +165,7 @@ public final class BarrelContentsReader {
         return new Barrel(world, pos.getX(), pos.getY(), pos.getZ(), item, buy, sell);
     }
 
-    private static boolean isSignItem(ItemStack stack) {
+    public static boolean isSignItem(ItemStack stack) {
         NbtCompound nbt = stack.getNbt();
         if (nbt == null || !nbt.contains("BlockEntityTag")) {
             return false;
@@ -122,7 +173,7 @@ public final class BarrelContentsReader {
         return stack.getItem().getTranslationKey().endsWith("sign");
     }
 
-    private static List<String> signLines(ItemStack stack) {
+    public static List<String> signLines(ItemStack stack) {
         NbtCompound nbt = stack.getNbt();
         if (nbt == null || !nbt.contains("BlockEntityTag")) {
             return new ArrayList<>();
@@ -184,7 +235,7 @@ public final class BarrelContentsReader {
         return t.replaceAll("[.!。，,]+$", "").trim();
     }
 
-    private static String itemDisplayName(ItemStack stack) {
+    public static String itemDisplayName(ItemStack stack) {
         NbtCompound nbt = stack.getNbt();
         if (nbt != null && nbt.contains("Monumenta") && nbt.contains("plain")) {
             NbtCompound plain = nbt.getCompound("plain");

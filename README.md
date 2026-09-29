@@ -1,9 +1,11 @@
 # PlotShop Manager
 
-一个用于 Monumenta 服务器的**纯客户端** Fabric 模组，用来管理的Plot桶商店：自动查询 CoreProtect 的容器记录、解析聊天输出，并按桶导出交易 CSV。
+一个用于 Monumenta 服务器的**纯客户端** Fabric 模组，用来管理的Plot桶商店。面向**店主**：自动查询 CoreProtect 的容器记录、解析聊天输出，并按桶导出交易 CSV；面向**顾客**：打开桶时自动检测误交易、估算公平价格，并记录本地交易行为日志。顾客功能独立实现，**不依赖 StonkCompanion**。
 
 
 ## 功能
+
+### 店主侧
 
 - **登记桶**：记录每个桶的世界坐标、商品、买入价、卖出价，持久化到本地 JSON。
 - **快速注册**：按下快捷键（默认 `K`）后右键桶，自动读取桶内告示牌（`buy for` / `sell for`）与商品物品，一键登记。
@@ -11,6 +13,12 @@
 - **增量扫描**：记录每个桶上次扫描时间，下次扫描自动从上次时间点续查，节省时间。
 - **按桶导出 CSV**：每个桶一个 CSV，另有 `barrels.csv` 汇总登记信息；UTF-8 BOM 编码，Excel 可直接打开。
 - **去重**：同一批查询重复解析到的记录只保留一次。
+
+### 顾客侧
+
+- **误交易计算器**：打开桶后自动对桶内容做快照，关闭时比对物品与货币净变化，依据告示牌价格判断交易是否正确，错误时给出应补入/应退还的货币数量。
+- **公平价格估算**：根据桶内货币与商品比例，在买入价与卖出价之间插值估算当前公平价，并提示该看更低或更高的桶。
+- **本地行为日志**：每次桶交易（含误交易）写入独立 CSV，记录时间戳、桶坐标、商品/货币净变化与核销结果。
 
 
 ## 使用方法
@@ -30,15 +38,24 @@
 | `/shop last` | 查看最近一条解析到的记录 |
 | `/shop export` | 按桶导出 CSV |
 | `/shop clear` | 清空内存中的记录 |
+| `/shop trade` | 查看顾客功能开关状态（误交易检测 / 公平价 / 行为日志） |
+| `/shop trade mistrade` | 开关误交易检测 |
+| `/shop trade fairprice` | 开关公平价格估算 |
+| `/shop trade log` | 开关本地行为日志 |
 
 **快速注册**：按 `K` 开启（可在「按键设置」中改键），然后右键桶即可自动读取告示牌与内容并登记；再按 `K` 关闭。
+
+**顾客功能**：无需登记，直接右键打开任意标有 `buy for` / `sell for` 告示牌的桶即可。打开时自动快照桶内容，关闭时比对变化并在聊天栏提示核销结果、公平价；默认三项功能全部开启，可用 `/shop trade ...` 按需开关。
 
 ## 数据文件
 
 - 登记信息：`.minecraft/config/plotshop-manager/barrels.json`
+- 顾客功能开关：`.minecraft/config/plotshop-manager/trade.json`
 - 导出记录：`.minecraft/config/plotshop-manager/exports/`
   - `barrel_<坐标>__<物品>.csv` —— 每个桶的交易明细
   - `barrels.csv` —— 登记汇总
+- 行为日志：`.minecraft/config/plotshop-manager/trade_logs/`
+  - `x<X>_y<Y>_z<Z>.csv` —— 每个桶的本地交易行为记录
 
 CSV 明细列：`timestamp, player, item, material, amount, direction, currency_type, currency_tier, barrel_x, barrel_y, barrel_z, world`。
 
@@ -54,7 +71,7 @@ CSV 明细列：`timestamp, player, item, material, amount, direction, currency_
 ./gradlew build
 ```
 
-生成的模组在 `build/libs/plotshop-manager-1.0.0.jar`。
+生成的模组在 `build/libs/plotshop-manager-1.1.0.jar`。
 
 ## 工作原理
 
@@ -68,6 +85,7 @@ CSV 明细列：`timestamp, player, item, material, amount, direction, currency_
 - 仅支持 Monumenta（依赖其 CoreProtect 输出格式与物品/货币命名）。
 - 告示牌没有 `buy for` / `sell for` 的桶无法用快速注册，需用 `/shop register` 手动登记。
 - 增量扫描的时间起点基于**本机时钟**，换电脑或改系统时间后建议用完整时间参数（如 `/shop scan guildplot 30d`）重新校准。
+- 顾客功能通过「打开时快照 → 关闭时比对」实现，无法识别快捷合成（quick-craft）式操作；如需该场景请勿仅依赖本模组核销。
 
 ## 许可
 

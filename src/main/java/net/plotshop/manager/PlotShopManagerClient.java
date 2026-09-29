@@ -52,6 +52,7 @@ public class PlotShopManagerClient implements ClientModInitializer {
     private final Set<String> seenKeys = new HashSet<>();
     private final BarrelStore barrelStore = new BarrelStore();
     private final BarrelScanner scanner;
+    private final TradeMonitor tradeMonitor = new TradeMonitor();
 
     private BlockPos lastBarrelPos = null;
     private String lastBarrelWorld = "";
@@ -104,6 +105,7 @@ public class PlotShopManagerClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         barrelStore.load();
+        tradeMonitor.register();
         quickRegisterKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.plotshop.quickregister",
                 InputUtil.Type.KEYSYM,
@@ -132,6 +134,7 @@ public class PlotShopManagerClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             scanner.tick();
             tickQuickRegister(client);
+            tradeMonitor.tick(client);
         });
         registerCommands();
     }
@@ -322,7 +325,27 @@ public class PlotShopManagerClient implements ClientModInitializer {
                             .executes(context -> {
                                 clear(context.getSource());
                                 return 1;
-                            })));
+                            }))
+                    .then(ClientCommandManager.literal("trade")
+                            .executes(context -> {
+                                tradeMonitor.status(context.getSource());
+                                return 1;
+                            })
+                            .then(ClientCommandManager.literal("mistrade")
+                                    .executes(context -> {
+                                        tradeMonitor.toggleMistrade(context.getSource());
+                                        return 1;
+                                    }))
+                            .then(ClientCommandManager.literal("fairprice")
+                                    .executes(context -> {
+                                        tradeMonitor.toggleFairPrice(context.getSource());
+                                        return 1;
+                                    }))
+                            .then(ClientCommandManager.literal("log")
+                                    .executes(context -> {
+                                        tradeMonitor.toggleLog(context.getSource());
+                                        return 1;
+                                    }))));
         });
     }
 
