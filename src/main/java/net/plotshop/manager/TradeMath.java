@@ -39,10 +39,12 @@ public final class TradeMath {
     /** Net movement of goods and currency over a barrel session. */
     public static final class NetChange {
         public double mats;                                  // net goods (sign excluded), +in/-out
+        public double correctMats;                           // goods belonging to the barrel's group
+        public double wrongMats;                             // goods NOT in the barrel's group
         public final Map<String, Double> currency = new HashMap<>(); // type -> compressed delta
 
         public boolean isEmpty() {
-            if (Math.abs(mats) > EPS) {
+            if (Math.abs(mats) > EPS || Math.abs(correctMats) > EPS || Math.abs(wrongMats) > EPS) {
                 return false;
             }
             for (double v : currency.values()) {
@@ -51,6 +53,44 @@ public final class TradeMath {
                 }
             }
             return true;
+        }
+    }
+
+    /**
+     * Which items count as "correct goods" for a barrel. {@code type} is one of
+     * {@code exclusive} (one item), {@code rare} (a fragment plus its rares) or
+     * {@code custom} (exchange, same matching as exclusive). A null filter means
+     * "unknown/lenient": every non-currency item counts as correct goods.
+     */
+    public static final class GoodsFilter {
+        public final String type;
+        public final String expected; // item name (exclusive/custom) or frag group (rare)
+
+        public GoodsFilter(String type, String expected) {
+            this.type = type;
+            this.expected = expected;
+        }
+
+        public boolean matches(String itemName) {
+            if (expected == null || expected.isEmpty() || itemName == null) {
+                return false;
+            }
+            // Resolve sign aliases ("white mat" -> "Soul Essence") on both sides.
+            String exp = AliasStore.get().resolve(expected);
+            String name = AliasStore.get().resolve(itemName);
+            if ("exclusive".equals(type)) {
+                // Strict single-item matching, even when the item is a fragment.
+                return RareFragIndex.baseName(name)
+                        .equals(RareFragIndex.baseName(exp));
+            }
+            // "rare" and "custom" shops accept a whole frag group when the
+            // expected item is a fragment or a rare of some group.
+            String group = RareFragIndex.get().fragOf(exp);
+            if (group != null) {
+                return group.equals(RareFragIndex.get().fragOf(name));
+            }
+            return RareFragIndex.baseName(name)
+                    .equals(RareFragIndex.baseName(exp));
         }
     }
 
@@ -163,20 +203,33 @@ public final class TradeMath {
     /**
      * Classify a per-item net change into goods and per-type currency deltas.
      * Sign items must already be excluded by the caller.
+     *
+     * <p>With a non-null {@link GoodsFilter}, non-currency items are split into
+     * {@code correctMats} (items the barrel accepts) and {@code wrongMats}
+     * (everything else). With a null filter (unknown/lenient) all non-currency
+     * items count as correct goods.</p>
      */
-    public static NetChange classify(Map<String, Integer> deltas, boolean stackBarrel) {
+    public static NetChange classify(Map<String, Integer> deltas, boolean stackBarrel, GoodsFilter filter) {
         NetChange net = new NetChange();
         for (Map.Entry<String, Integer> e : deltas.entrySet()) {
             CurrencyMapper.Currency c = CurrencyMapper.classify(e.getKey());
             if (c != null) {
                 net.currency.merge(c.type, e.getValue() * c.multiplier, Double::sum);
+                continue;
+            }
+            int amount = e.getValue();
+            net.mats += amount;
+            if (filter == null || filter.matches(e.getKey())) {
+                net.correctMats += amount;
             }
             else {
-                net.mats += e.getValue();
+                net.wrongMats += amount;
             }
         }
         if (stackBarrel) {
             net.mats /= 64.0;
+            net.correctMats /= 64.0;
+            net.wrongMats /= 64.0;
         }
         return net;
     }
@@ -185,30 +238,48 @@ public final class TradeMath {
      * Validate a session against the barrel's sign. {@code buy} is the price the
      * barrel pays to the customer (customer takes goods, pays currency);
      * {@code sell} is what the customer pays to stock the barrel.
+     *
+     * <p>{@code filter} describes which items the barrel accepts (null = lenient,
+     * any goods count). {@code exchangeFee} is non-null only for "custom" shops:
+     * a flat fee (or 0 for a free exchange) the customer must leave.</p>
      */
-    public static Validation validate(NetChange net, String label, Price buy, Price sell) {
-        boolean stackBarrel = isStackBarrel(label);
-
+    public static Validation validate(NetChange net, String label, Price buy, Price sell,
+                                      GoodsFilter filter, Price exchangeFee) {
         if (net.isEmpty()) {
             return new Validation(true, null, "无物品/货币变动", false);
         }
-        if (Math.abs(net.mats) < EPS) {
+        if (filter != null && "custom".equals(filter.type)) {
+            return validateExchange(net, filter, exchangeFee);
+        }
+
+        boolean wrongGoods = Math.abs(net.wrongMats) > EPS;
+        double goods = net.correctMats;
+
+        if (Math.abs(goods) < EPS) {
+            if (wrongGoods) {
+                return new Validation(false,
+                        "交易有误：放入了错误的物品" + acceptSuffix(filter),
+                        "错误物品=" + round2(net.wrongMats), true);
+            }
             return new Validation(true, null, "仅货币变动（未涉及物品）", false);
         }
 
-        boolean buying = net.mats < 0; // customer took goods -> barrel buys
-        Price price = buying ? buy : sell;
-        String side = buying ? "buy" : "sell";
+        // goods < 0 means the customer took goods out: that is a purchase, so the
+        // customer owes the barrel's sell (ask) price. goods > 0 means the customer
+        // stocked goods, so the barrel owes the customer the buy (bid) price.
+        boolean bought = goods < 0;
+        Price price = bought ? sell : buy;
+        String side = bought ? "sell" : "buy";
 
         if (price == null || price.compressed <= EPS) {
             return new Validation(false,
                     "该桶未标 " + side + " 价，无法核销",
-                    "未标价(" + side + ")，mats=" + net.mats,
+                    "未标价(" + side + ")，goods=" + round2(goods),
                     true);
         }
 
-        double expectedDelta = Math.abs(net.mats) * price.compressed;
-        if (!buying) {
+        double expectedDelta = Math.abs(goods) * price.compressed;
+        if (!bought) {
             expectedDelta = -expectedDelta; // customer should take currency out
         }
         double actualDelta = net.currency.getOrDefault(price.type, 0.0);
@@ -220,39 +291,111 @@ public final class TradeMath {
             }
         }
 
+        // Tolerance matching StonkCompanion's 0.0005 bound check.
         double delta = expectedDelta - actualDelta;
+        if (Math.abs(delta) < 0.0005) {
+            delta = 0;
+        }
+
         StringBuilder detail = new StringBuilder()
-                .append("mats=").append(round2(net.mats))
+                .append("goods=").append(round2(goods))
                 .append(" side=").append(side)
                 .append(" price=").append(round2(price.compressed))
                 .append(" expected=").append(round2(expectedDelta))
                 .append(" actual=").append(round2(actualDelta));
-
+        if (wrongGoods) {
+            detail.append(" wrongItem=").append(round2(net.wrongMats));
+        }
         if (wrongCurrency > EPS) {
-            return new Validation(false,
-                    "检测到错误货币类型（桶用 " + price.type + "），请人工处理",
-                    detail.append(" wrongCurrency=").append(round2(wrongCurrency)).toString(),
-                    true);
+            detail.append(" wrongCurrency=").append(round2(wrongCurrency));
         }
 
-        if (Math.abs(delta) < EPS) {
-            return new Validation(true,
-                    null,
-                    detail.append(" ok").toString(),
-                    true);
+        boolean deltaOk = Math.abs(delta) < EPS;
+        boolean wrongCur = wrongCurrency > EPS;
+
+        if (!wrongGoods && !wrongCur && deltaOk) {
+            return new Validation(true, null, detail.append(" ok").toString(), true);
         }
 
-        String fix = formatCurrency(Math.abs(delta), price.type);
-        if (delta > EPS) {
-            return new Validation(false,
-                    "交易有误：还需放入 " + fix + " " + price.type,
-                    detail.append(" 欠=").append(round2(delta)).toString(),
-                    true);
+        List<String> issues = new ArrayList<>();
+        if (wrongGoods) {
+            issues.add("放入了错误的物品" + acceptSuffix(filter));
         }
-        return new Validation(false,
-                "交易有误：多出了 " + fix + " " + price.type + "（应退还）",
-                detail.append(" 溢=").append(round2(-delta)).toString(),
-                true);
+        if (!deltaOk) {
+            String fix = formatCurrency(Math.abs(delta), price.type);
+            issues.add(delta > EPS ? "还需放入 " + fix : "应退还 " + fix);
+        }
+        if (wrongCur) {
+            issues.add("使用了错误的货币（本桶应使用 " + price.type + "）");
+        }
+        return new Validation(false, "交易有误：" + String.join("，且 ", issues),
+                detail.toString(), true);
+    }
+
+    /**
+     * Validate a "custom" exchange barrel: the customer swaps items of the
+     * accepted group 1:1 and leaves a flat fee (0 for "exchange for free").
+     */
+    private static Validation validateExchange(NetChange net, GoodsFilter filter, Price fee) {
+        boolean wrongGoods = Math.abs(net.wrongMats) > EPS;
+        double goods = net.correctMats;
+
+        String detail = "swap=" + round2(goods) + " fee=" + (fee == null ? "free" : round2(fee.compressed) + fee.type);
+        if (wrongGoods) {
+            detail += " wrongItem=" + round2(net.wrongMats);
+        }
+
+        List<String> issues = new ArrayList<>();
+        if (wrongGoods) {
+            issues.add("放入了错误的物品" + acceptSuffix(filter));
+        }
+        if (Math.abs(goods) > EPS) {
+            issues.add("互换必须 1:1（放入与取出的数量需相等，当前差额 " + round2(goods) + "）");
+        }
+
+        if (fee == null || fee.compressed <= EPS) {
+            // Free exchange: no currency should change hands.
+            double anyCurrency = 0.0;
+            for (double v : net.currency.values()) {
+                anyCurrency += Math.abs(v);
+            }
+            if (anyCurrency > EPS) {
+                issues.add("免费互换不应放入货币");
+            }
+        }
+        else {
+            double actualFee = net.currency.getOrDefault(fee.type, 0.0);
+            double wrongCurrency = 0.0;
+            for (Map.Entry<String, Double> e : net.currency.entrySet()) {
+                if (!e.getKey().equals(fee.type)) {
+                    wrongCurrency += Math.abs(e.getValue());
+                }
+            }
+            double delta = fee.compressed - actualFee;
+            if (Math.abs(delta) >= 0.0005) {
+                issues.add(delta > 0
+                        ? "还需放入手续费 " + formatCurrency(delta, fee.type)
+                        : "手续费多放 " + formatCurrency(-delta, fee.type));
+            }
+            if (wrongCurrency > EPS) {
+                issues.add("手续费货币应为 " + fee.type);
+            }
+        }
+
+        if (issues.isEmpty()) {
+            return new Validation(true, null, detail + " ok", true);
+        }
+        return new Validation(false, "交易有误：" + String.join("，且 ", issues), detail, true);
+    }
+
+    /** "（本桶仅收 X 组的 rare/frag）" / "（本桶仅收 X）" or "". */
+    private static String acceptSuffix(GoodsFilter filter) {
+        if (filter == null || filter.expected == null || filter.expected.isEmpty()) {
+            return "";
+        }
+        return "rare".equals(filter.type)
+                ? "（本桶仅收 " + filter.expected + " 组的 rare/frag）"
+                : "（本桶仅收 " + filter.expected + "）";
     }
 
     /**

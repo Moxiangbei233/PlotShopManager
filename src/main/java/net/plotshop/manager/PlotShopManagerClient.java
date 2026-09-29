@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -59,6 +60,8 @@ public class PlotShopManagerClient implements ClientModInitializer {
     private int recordsBeforeScan = 0;
 
     private KeyBinding quickRegisterKey;
+    private KeyBinding settingsKey;
+    private KeyBinding registerGuiKey;
     private boolean quickRegister = false;
     private BlockPos quickTargetPos = null;
     private String quickTargetWorld = "";
@@ -105,11 +108,23 @@ public class PlotShopManagerClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         barrelStore.load();
-        tradeMonitor.register();
+        tradeMonitor.register(barrelStore);
         quickRegisterKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.plotshop.quickregister",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_K,
+                "key.categories.plotshop"
+        ));
+        settingsKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.plotshop.settings",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_P,
+                "key.categories.plotshop"
+        ));
+        registerGuiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.plotshop.registergui",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_G,
                 "key.categories.plotshop"
         ));
 
@@ -134,6 +149,8 @@ public class PlotShopManagerClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             scanner.tick();
             tickQuickRegister(client);
+            tickSettingsKey(client);
+            tickRegisterGuiKey(client);
             tradeMonitor.tick(client);
         });
         registerCommands();
@@ -157,6 +174,36 @@ public class PlotShopManagerClient implements ClientModInitializer {
         sendFeedback(Text.literal(PREFIX + (quickRegister
                 ? "§a快速注册已开启§f：右键点击一个桶即可自动读取告示牌与内容并注册，再按 §e" + key + " §f关闭。"
                 : "§e快速注册已关闭。")));
+    }
+
+    private void tickSettingsKey(MinecraftClient client) {
+        if (settingsKey != null && settingsKey.wasPressed() && client != null) {
+            client.setScreen(new PlotShopSettingsScreen(tradeMonitor, client.currentScreen));
+        }
+    }
+
+    private void tickRegisterGuiKey(MinecraftClient client) {
+        if (registerGuiKey == null || !registerGuiKey.wasPressed()
+                || client == null || client.player == null || client.world == null) {
+            return;
+        }
+        if (client.currentScreen != null) {
+            return; // Do not interrupt another screen.
+        }
+        BlockPos pos = getLookedAtBlock(client);
+        if (pos == null || !client.world.getBlockState(pos).isOf(Blocks.BARREL)) {
+            sendFeedback(Text.literal(PREFIX + "§c请先看向一个桶再按注册快捷键。"));
+            return;
+        }
+        String world = client.world.getRegistryKey().getValue().toString();
+        client.setScreen(new RegisterBarrelScreen(barrelStore, world, pos));
+    }
+
+    private void openSettings(FabricClientCommandSource source) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client != null) {
+            client.setScreen(new PlotShopSettingsScreen(tradeMonitor, client.currentScreen));
+        }
     }
 
     private void tickQuickRegister(MinecraftClient client) {
@@ -201,9 +248,14 @@ public class PlotShopManagerClient implements ClientModInitializer {
         barrelStore.upsert(barrel);
         barrelStore.save();
         sendFeedback(Text.literal(PREFIX + "§a已快速注册桶 §b@" + barrel.x + "," + barrel.y + "," + barrel.z
-                + " §f物品 §a" + barrel.item
+                + " §f[§d" + barrel.typeLabel() + "§f] §a" + barrel.item
+                + (barrel.alias.isEmpty() ? "" : " §7(" + barrel.alias + ")")
+                + (barrel.tier > 0 ? " §7#" + barrel.tier : "")
                 + " §f买 §a" + (barrel.buyPrice.isEmpty() ? "-" : barrel.buyPrice)
                 + " §f卖 §a" + (barrel.sellPrice.isEmpty() ? "-" : barrel.sellPrice)
+                + ("custom".equals(barrel.type)
+                        ? " §f手续费 §a" + (barrel.exchangeFee.isEmpty() ? "free" : barrel.exchangeFee)
+                        : "")
                 + " §f。右键下一个桶继续。"));
         quickTargetPos = null;
         quickTargetWorld = "";
@@ -263,9 +315,43 @@ public class PlotShopManagerClient implements ClientModInitializer {
                                         return 1;
                                     })))
                     .then(ClientCommandManager.literal("register")
+                            .then(ClientCommandManager.literal("rare")
+                                    .then(ClientCommandManager.argument("spec", StringArgumentType.greedyString())
+                                            .executes(context -> {
+                                                register(context.getSource(),
+                                                        StringArgumentType.getString(context, "spec"), "rare");
+                                                return 1;
+                                            })))
+                            .then(ClientCommandManager.literal("exclusive")
+                                    .then(ClientCommandManager.argument("spec", StringArgumentType.greedyString())
+                                            .executes(context -> {
+                                                register(context.getSource(),
+                                                        StringArgumentType.getString(context, "spec"), "exclusive");
+                                                return 1;
+                                            })))
+                            .then(ClientCommandManager.literal("custom")
+                                    .then(ClientCommandManager.argument("spec", StringArgumentType.greedyString())
+                                            .executes(context -> {
+                                                register(context.getSource(),
+                                                        StringArgumentType.getString(context, "spec"), "custom");
+                                                return 1;
+                                            })))
                             .then(ClientCommandManager.argument("spec", StringArgumentType.greedyString())
                                     .executes(context -> {
-                                        register(context.getSource(), StringArgumentType.getString(context, "spec"));
+                                        register(context.getSource(),
+                                                StringArgumentType.getString(context, "spec"), null);
+                                        return 1;
+                                    })))
+                    .then(ClientCommandManager.literal("alias")
+                            .then(ClientCommandManager.literal("list")
+                                    .executes(context -> {
+                                        aliasList(context.getSource());
+                                        return 1;
+                                    }))
+                            .then(ClientCommandManager.argument("spec", StringArgumentType.greedyString())
+                                    .executes(context -> {
+                                        aliasAdd(context.getSource(),
+                                                StringArgumentType.getString(context, "spec"));
                                         return 1;
                                     })))
                     .then(ClientCommandManager.literal("unregister")
@@ -345,7 +431,17 @@ public class PlotShopManagerClient implements ClientModInitializer {
                                     .executes(context -> {
                                         tradeMonitor.toggleLog(context.getSource());
                                         return 1;
-                                    }))));
+                                    }))
+                            .then(ClientCommandManager.literal("hud")
+                                    .executes(context -> {
+                                        tradeMonitor.toggleHud(context.getSource());
+                                        return 1;
+                                    })))
+                    .then(ClientCommandManager.literal("settings")
+                            .executes(context -> {
+                                openSettings(context.getSource());
+                                return 1;
+                            })));
         });
     }
 
@@ -375,7 +471,7 @@ public class PlotShopManagerClient implements ClientModInitializer {
                 + " §a(§7" + lastBarrelWorld + "§a)"));
     }
 
-    private void register(FabricClientCommandSource source, String spec) {
+    private void register(FabricClientCommandSource source, String spec, String type) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (!gameReady(source, client)) {
             return;
@@ -383,11 +479,43 @@ public class PlotShopManagerClient implements ClientModInitializer {
 
         String[] parts = spec.split("\\|");
         String item = parts.length > 0 ? parts[0].trim() : "";
-        String buy = parts.length > 1 ? parts[1].trim() : "";
-        String sell = parts.length > 2 ? parts[2].trim() : "";
+        String buy = "";
+        String sell = "";
+        String exchangeFee = "";
+        if ("custom".equals(type)) {
+            // custom: 物品|手续费 ("free" / "0.5har")
+            exchangeFee = parts.length > 1 ? parts[1].trim() : "free";
+        }
+        else {
+            buy = parts.length > 1 ? parts[1].trim() : "";
+            sell = parts.length > 2 ? parts[2].trim() : "";
+        }
         if (item.isEmpty()) {
-            source.sendFeedback(Text.literal(PREFIX + "§c格式：§e/shop register 物品|买入价|卖出价§c，例如 §e/shop register 经验瓶|10xp|5xp"));
+            source.sendFeedback(Text.literal(PREFIX + "§c格式：§e/shop register [rare|exclusive|custom] 物品|买入价|卖出价"));
+            source.sendFeedback(Text.literal(PREFIX + "§7专属：§e/shop register 物品|买入价|卖出价"));
+            source.sendFeedback(Text.literal(PREFIX + "§7rare通用：§e/shop register rare 物品|买入价|卖出价"));
+            source.sendFeedback(Text.literal(PREFIX + "§7互换：§e/shop register custom 物品|0.5har §7或 §e/shop register custom 物品|free"));
             return;
+        }
+
+        // Resolve a known sign alias to the real item name.
+        String typedItem = item;
+        String resolvedItem = AliasStore.get().resolve(item);
+        if (!resolvedItem.equals(item)) {
+            item = resolvedItem;
+        }
+
+        // Auto-detect the type when the command omitted it.
+        if (type == null) {
+            if (!exchangeFee.isEmpty()) {
+                type = "custom";
+            }
+            else if (RareFragIndex.get().fragOf(item) != null) {
+                type = "rare";
+            }
+            else {
+                type = "exclusive";
+            }
         }
 
         BlockPos pos = getLookedAtBlock(client);
@@ -398,18 +526,52 @@ public class PlotShopManagerClient implements ClientModInitializer {
 
         String world = client.world.getRegistryKey().getValue().toString();
         Barrel barrel = new Barrel(world, pos.getX(), pos.getY(), pos.getZ(), item, buy, sell);
+        barrel.type = type;
+        barrel.exchangeFee = exchangeFee;
+        if (!typedItem.equals(item)) {
+            barrel.alias = typedItem;
+        }
         barrelStore.upsert(barrel);
         barrelStore.save();
 
         source.sendFeedback(Text.literal(PREFIX + "§a已登记桶 §b@" + pos.getX() + "," + pos.getY() + "," + pos.getZ()
-                + " §f物品 §a" + item
+                + " §f[§d" + barrel.typeLabel() + "§f] §a" + item
+                + (barrel.alias.isEmpty() ? "" : " §7(" + barrel.alias + ")")
                 + " §f买 §a" + (buy.isEmpty() ? "-" : buy)
-                + " §f卖 §a" + (sell.isEmpty() ? "-" : sell)));
+                + " §f卖 §a" + (sell.isEmpty() ? "-" : sell)
+                + ("custom".equals(type)
+                        ? " §f手续费 §a" + (exchangeFee.isEmpty() ? "free" : exchangeFee)
+                        : "")));
 
         boolean isBarrel = client.world.getBlockState(pos).isOf(Blocks.BARREL);
         if (!isBarrel) {
             source.sendFeedback(Text.literal(PREFIX + "§e提示：目标方块不是桶，请确认坐标是否正确"));
         }
+    }
+
+    private void aliasAdd(FabricClientCommandSource source, String spec) {
+        String[] parts = spec.split("\\|");
+        String alias = parts.length > 0 ? parts[0].trim() : "";
+        String actual = parts.length > 1 ? parts[1].trim() : "";
+        if (alias.isEmpty() || actual.isEmpty()) {
+            source.sendFeedback(Text.literal(PREFIX + "§c格式：§e/shop alias 别名|实际物品名§c，例如 §e/shop alias white mat|Soul Essence"));
+            return;
+        }
+        AliasStore.get().put(alias, actual);
+        source.sendFeedback(Text.literal(PREFIX + "§a已添加别名 §e" + alias + " §f→ §a" + actual));
+    }
+
+    private void aliasList(FabricClientCommandSource source) {
+        Map<String, String> aliases = AliasStore.get().all();
+        if (aliases.isEmpty()) {
+            source.sendFeedback(Text.literal(PREFIX + "§c暂无别名，用 §e/shop alias 别名|实际物品名 §c添加"));
+            return;
+        }
+        StringBuilder sb = new StringBuilder(PREFIX + "§a别名列表（§e" + aliases.size() + "§a）：");
+        for (Map.Entry<String, String> e : aliases.entrySet()) {
+            sb.append('\n').append("§8  §e").append(e.getKey()).append(" §7→ §f").append(e.getValue());
+        }
+        source.sendFeedback(Text.literal(sb.toString()));
     }
 
     private void unregister(FabricClientCommandSource source) {
@@ -455,9 +617,15 @@ public class PlotShopManagerClient implements ClientModInitializer {
         for (Barrel b : barrels) {
             double dist = Math.sqrt(horizontalDistanceSq(b, world, feet));
             sb.append('\n').append("§8  ").append(b.x).append(',').append(b.y).append(',').append(b.z)
-                    .append(" §7[").append(b.world).append("] §f").append(b.item)
+                    .append(" §7[").append(b.world).append("] §d[").append(b.typeLabel()).append("§d] §f")
+                    .append(b.item)
+                    .append(b.alias.isEmpty() ? "" : " §7(" + b.alias + ")")
+                    .append(b.tier > 0 ? " §7#" + b.tier : "")
                     .append(" §a买").append(b.buyPrice.isEmpty() ? "-" : b.buyPrice)
                     .append(" §a卖").append(b.sellPrice.isEmpty() ? "-" : b.sellPrice)
+                    .append("custom".equals(b.type)
+                            ? (" §a费" + (b.exchangeFee.isEmpty() ? "free" : b.exchangeFee))
+                            : "")
                     .append(" §7距离").append(String.format("%.1f", dist));
         }
         source.sendFeedback(Text.literal(sb.toString()));

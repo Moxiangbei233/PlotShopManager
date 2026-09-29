@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "package": "net.plotshop.manager.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "HandledScreenAccessor",
+    "AbstractSignEditScreenAccessor",
+    "AbstractSignEditScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

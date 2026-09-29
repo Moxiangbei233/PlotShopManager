@@ -1,4 +1,6 @@
 {
   "key.categories.plotshop": "PlotShop Manager",
-  "key.plotshop.quickregister": "Toggle Quick Register"
+  "key.plotshop.quickregister": "Toggle Quick Register",
+  "key.plotshop.settings": "Open PlotShop Settings",
+  "key.plotshop.registergui": "Open Barrel Registration GUI"
 }

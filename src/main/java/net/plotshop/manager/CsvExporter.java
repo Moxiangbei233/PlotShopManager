@@ -27,7 +27,8 @@ public final class CsvExporter {
     };
 
     private static final String[] REGISTRY_HEADER = {
-            "world", "x", "y", "z", "item", "buy_price", "sell_price", "record_count"
+            "world", "x", "y", "z", "type", "item", "alias", "tier", "buy_price", "sell_price",
+            "exchange_fee", "record_count"
     };
 
     private CsvExporter() {
@@ -100,9 +101,13 @@ public final class CsvExporter {
                     .append(barrel == null ? "" : barrel.x).append(',')
                     .append(barrel == null ? "" : barrel.y).append(',')
                     .append(barrel == null ? "" : barrel.z).append(',')
+                    .append(escape(barrel == null ? "" : barrel.type)).append(',')
                     .append(escape(barrel == null ? "" : barrel.item)).append(',')
+                    .append(escape(barrel == null ? "" : barrel.alias)).append(',')
+                    .append(barrel == null ? "" : barrel.tier).append(',')
                     .append(escape(barrel == null ? "" : barrel.buyPrice)).append(',')
                     .append(escape(barrel == null ? "" : barrel.sellPrice)).append(',')
+                    .append(escape(barrel == null ? "" : barrel.exchangeFee)).append(',')
                     .append(entry.getValue().size())
                     .append("\r\n");
         }

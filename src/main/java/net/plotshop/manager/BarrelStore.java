@@ -29,6 +29,16 @@ public class BarrelStore {
         return barrels;
     }
 
+    /** Look up a registered barrel by world + position, or null when absent. */
+    public Barrel find(String world, int x, int y, int z) {
+        for (Barrel b : barrels) {
+            if (b.world.equals(world) && b.x == x && b.y == y && b.z == z) {
+                return b;
+            }
+        }
+        return null;
+    }
+
     public void load() {
         Path file = file();
         if (!Files.exists(file)) {

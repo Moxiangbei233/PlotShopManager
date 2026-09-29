@@ -15,6 +15,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Reads a barrel's container contents to build a {@link Barrel} registration.
@@ -23,19 +25,36 @@ import java.util.Map;
  * <em>item</em> inside the barrel (NBT {@code BlockEntityTag.front_text.messages}),
  * the goods item is the non-currency item in the barrel, and currency stacks are
  * ignored because the price already encodes the currency type.</p>
+ *
+ * <p>Sign layout (4 lines): lines 1-2 hold the item name with an optional barrel
+ * number ({@code #N} or a bare trailing number) and an optional {@code ======}
+ * separator; line 3 is {@code buy for <price>} or {@code exchange for <fee>};
+ * line 4 is {@code sell for <price>}. Old layouts with prices on any line are
+ * still accepted.</p>
  */
 public final class BarrelContentsReader {
 
-    /** Parsed shop sign: a label plus the optional buy/sell prices. */
+    /** Trailing barrel number with a "#" marker, e.g. "#3". */
+    private static final Pattern HASH_NUMBER = Pattern.compile("#\\s*(\\d{1,2})\\s*$");
+    /** Trailing bare barrel number, only used when a "=" separator is present. */
+    private static final Pattern BARE_NUMBER = Pattern.compile("(\\d{1,2})\\s*$");
+
+    /** Parsed shop sign: a label, tier number and optional buy/sell/exchange info. */
     public static final class SignInfo {
         public final String label;
         public final String buy;
         public final String sell;
+        /** Exchange fee text ("free" or e.g. "0.5har"), empty when not an exchange. */
+        public final String exchange;
+        /** Barrel tier number 1..N, or 0 when the sign carries no number. */
+        public final int tier;
 
-        SignInfo(String label, String buy, String sell) {
+        SignInfo(String label, String buy, String sell, String exchange, int tier) {
             this.label = label;
             this.buy = buy;
             this.sell = sell;
+            this.exchange = exchange;
+            this.tier = tier;
         }
     }
 
@@ -43,8 +62,9 @@ public final class BarrelContentsReader {
     }
 
     /**
-     * Read the shop sign from a barrel screen, returning its label and prices.
-     * Returns null when the container holds no sign with a buy/sell price.
+     * Read the shop sign from a barrel screen, returning its label, tier and
+     * prices. Returns null when the container holds no sign with a recognised
+     * price or exchange keyword.
      */
     public static SignInfo readSign(ScreenHandler handler) {
         if (handler == null) {
@@ -58,24 +78,114 @@ public final class BarrelContentsReader {
             if (lines.isEmpty()) {
                 continue;
             }
-            String label = lines.get(0).isBlank() ? "" : cleanText(lines.get(0));
+
+            String line0 = lines.get(0) == null ? "" : cleanText(lines.get(0));
+            String line1 = lines.size() > 1 ? cleanText(lines.get(1)) : "";
+
             String buy = "";
             String sell = "";
+            String exchange = "";
             for (String line : lines) {
                 String clean = cleanText(line);
                 String lower = clean.toLowerCase(Locale.ROOT);
+                String exchangeFound = extractExchange(clean, lower);
                 int bi = lower.indexOf("buy for");
                 int si = lower.indexOf("sell for");
-                if (bi >= 0) {
+                if (exchangeFound != null) {
+                    exchange = exchangeFound;
+                }
+                else if (bi >= 0) {
                     buy = cleanPrice(clean.substring(bi + 7));
                 }
                 else if (si >= 0) {
                     sell = cleanPrice(clean.substring(si + 8));
                 }
             }
-            if (!buy.isEmpty() || !sell.isEmpty()) {
-                return new SignInfo(label, buy, sell);
+
+            if (buy.isEmpty() && sell.isEmpty() && exchange.isEmpty()) {
+                continue;
             }
+
+            // Item name lives on lines 1-2; join them unless a price keyword is on
+            // one of them (old single-line-label layout).
+            String raw;
+            if (hasKeyword(line0) || hasKeyword(line1) || line1.isEmpty()) {
+                raw = line0;
+            }
+            else {
+                raw = (line0 + " " + line1).trim();
+            }
+
+            String[] labelTier = splitLabel(raw);
+            return new SignInfo(labelTier[0], buy, sell, exchange,
+                    Integer.parseInt(labelTier[1]));
+        }
+        return null;
+    }
+
+    /**
+     * Strip "=" separators and a barrel number from a label. A "#N" marker is
+     * always treated as the barrel number; a bare trailing number is only treated
+     * as the barrel number when a "=" separator is present, so item names that
+     * themselves end in a digit (e.g. "Corrupted Key 5") are kept.
+     */
+    private static String[] splitLabel(String raw) {
+        String s = raw.trim();
+        boolean hasSeparator = s.contains("=");
+        s = s.replaceAll("=+", " ").replaceAll("\\s+", " ").trim();
+
+        int tier = 0;
+        Matcher hash = HASH_NUMBER.matcher(s);
+        if (hash.find()) {
+            tier = parseTier(hash.group(1));
+            if (tier > 0) {
+                s = s.substring(0, hash.start()).trim();
+            }
+        }
+        else if (hasSeparator) {
+            Matcher bare = BARE_NUMBER.matcher(s);
+            if (bare.find()) {
+                tier = parseTier(bare.group(1));
+                if (tier > 0) {
+                    s = s.substring(0, bare.start()).trim();
+                }
+            }
+        }
+
+        s = s.replaceAll("\\s+", " ").trim();
+        return new String[] { s, String.valueOf(tier) };
+    }
+
+    private static int parseTier(String digits) {
+        try {
+            int tier = Integer.parseInt(digits);
+            return tier > 0 && tier < 100 ? tier : 0;
+        }
+        catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    private static boolean hasKeyword(String line) {
+        String lower = line.toLowerCase(Locale.ROOT);
+        return lower.contains("buy for") || lower.contains("sell for")
+                || lower.contains("exchange for") || lower.contains("exch for")
+                || lower.contains("swap for");
+    }
+
+    /** Extract an exchange fee from "exchange for X" / "exch for X" / "swap for X". */
+    private static String extractExchange(String clean, String lower) {
+        int ei = lower.indexOf("exchange for");
+        if (ei >= 0) {
+            return cleanPrice(clean.substring(ei + 12));
+        }
+        ei = lower.indexOf("exch for");
+        if (ei >= 0) {
+            return cleanPrice(clean.substring(ei + 8));
+        }
+        ei = lower.indexOf("swap for");
+        if (ei >= 0) {
+            return cleanPrice(clean.substring(ei + 8));
         }
         return null;
     }
@@ -90,7 +200,7 @@ public final class BarrelContentsReader {
             return contents;
         }
         for (ItemStack stack : containerStacks(handler)) {
-            if (isSignItem(stack)) {
+            if (stack.isEmpty() || isSignItem(stack)) {
                 continue;
             }
             String name = itemDisplayName(stack);
@@ -131,10 +241,12 @@ public final class BarrelContentsReader {
         String buy = sign.buy;
         String sell = sign.sell;
 
-        // The goods item is the non-currency, non-sign item with the highest total count.
+        // The goods item is the non-currency, non-sign item with the highest total
+        // count. Empty slots are skipped so a currency-only barrel does not
+        // register the empty slot as the item "Air".
         Map<String, Integer> goods = new HashMap<>();
         for (ItemStack stack : containerStacks) {
-            if (isSignItem(stack)) {
+            if (stack.isEmpty() || isSignItem(stack)) {
                 continue;
             }
             String name = itemDisplayName(stack);
@@ -155,14 +267,38 @@ public final class BarrelContentsReader {
                 item = entry.getKey();
             }
         }
+
+        String signName = label == null ? "" : label.trim();
+        // No goods inside: fall back to the sign name, resolving known aliases.
         if (item.isEmpty()) {
-            item = label;
+            item = AliasStore.get().resolve(signName);
         }
         if (item.isEmpty()) {
             return null;
         }
 
-        return new Barrel(world, pos.getX(), pos.getY(), pos.getZ(), item, buy, sell);
+        // Determine the shop type from the sign and the dominant goods item.
+        String type;
+        if (!sign.exchange.isEmpty()) {
+            type = "custom";
+        }
+        else if (RareFragIndex.get().fragOf(AliasStore.get().resolve(item)) != null) {
+            type = "rare";
+        }
+        else {
+            type = "exclusive";
+        }
+
+        Barrel barrel = new Barrel(world, pos.getX(), pos.getY(), pos.getZ(), item, buy, sell);
+        barrel.type = type;
+        barrel.exchangeFee = sign.exchange;
+        barrel.tier = sign.tier;
+        // Remember the sign alias and learn the association for future lookups.
+        if (!signName.isEmpty() && !signName.equalsIgnoreCase(item)) {
+            barrel.alias = signName;
+            AliasStore.get().put(signName, item);
+        }
+        return barrel;
     }
 
     public static boolean isSignItem(ItemStack stack) {
