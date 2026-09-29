@@ -210,7 +210,7 @@ public final class TradeMonitor {
         Map<String, Integer> net = diff(s.snapshot, current);
         TradeMath.NetChange classified = TradeMath.classify(net, s.stackBarrel);
         TradeMath.Validation validation = TradeMath.validate(classified, s.label, s.buy, s.sell);
-        TradeMath.FairPrice fair = fairPriceEnabled && validation.traded
+        TradeMath.FairPrice fair = fairPriceEnabled
                 ? TradeMath.fairPrice(current, s.label, s.buy, s.sell)
                 : null;
 
